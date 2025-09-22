@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Accident Simulation Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-sA+e2kJg8Yv1b3g7QqY1QurYgJ+0q2hQl3YtW+7m2H0=" crossorigin=""/>
+  <style>
+    :root{
+      --accent:#0275d8;
+      --success:#28a745;
+      --danger:#dc3545;
+      --muted:#6c757d;
+      --panel-bg: #ffffff;
+      --shadow: 0 6px 20px rgba(0,0,0,0.08);
+      --glass: rgba(255,255,255,0.85);
+    }
+    html,body { height:100%; margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:linear-gradient(180deg,#eef4fb,#ffffff); color:#222; }
+    .app { display:flex; gap:18px; padding:18px; height:100%; box-sizing:border-box; align-items:stretch; }
+    .left, .right { background:var(--panel-bg); border-radius:12px; box-shadow:var(--shadow); padding:14px; }
+    .left { flex: 1.2; min-width:380px; display:flex; flex-direction:column; gap:12px; }
+    .right { width:420px; display:flex; flex-direction:column; gap:12px; }
+    h1 { margin:0 0 6px 0; font-size:18px; }
+    .card { background:var(--glass); padding:10px; border-radius:10px; }
+    #map { height:420px; border-radius:10px; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    button, select, input[type="checkbox"] { padding:8px 10px; border-radius:8px; border:1px solid #ddd; background:white; cursor:pointer; }
+    button.primary { background:var(--accent); color:white; border: none; }
+    button.warn { background:var(--danger); color:white; border: none; }
+    .media-row { display:flex; gap:10px; align-items:flex-start; }
+    video, audio { border-radius:8px; background:#000; max-width:100%; }
+    .log { max-height:220px; overflow:auto; font-size:13px; padding:8px; border-radius:8px; background:#fafafa; border:1px dashed #eee; }
+    .recipient-list { display:flex; flex-direction:column; gap:6px; }
+    .recipient { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; background:#fff; border:1px solid #eee; }
+    .status-dot { width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:8px; }
+    .dot-pending { background:#f0ad4e; }
+    .dot-sent { background:var(--success); }
+    .dot-failed { background:#b02a37; }
+    .small { font-size:13px; color:var(--muted); }
+    .row { display:flex; gap:10px; align-items:center; }
+    .download-links a { display:inline-block; margin-right:8px; text-decoration:none; padding:6px 8px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:13px; }
+    footer { font-size:12px; color:var(--muted); text-align:center; margin-top:8px; }
+    @media (max-width:1000px) {
+      .app { flex-direction:column; padding:10px; }
+      .right { width:100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="left">
+      <div class="card">
+        <h1>Accident Simulation Dashboard</h1>
+        <div class="small">Track incident time & location, capture audio/video, alert nearby responders.</div>
+      </div>
+
+      <div class="card" id="map-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <strong>Map - Incident & Nearby Responders</strong>
+          <div class="small" id="incident-time">Incident time: —</div>
+        </div>
+        <div id="map"></div>
+        <div class="small" style="margin-top:8px;">Lines from incident to recipients turn green once message-sent simulation completes.</div>
+      </div>
+
+      <div class="card">
+        <strong>Incident Controls</strong>
+        <div style="margin-top:8px;" class="controls">
+          <button class="primary" id="simulate-btn">Simulate Collision / Trigger Incident</button>
+          <button id="add-manual" title="Place manual marker">Place Manual Marker</button>
+          <label style="display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="auto-locate" /> Auto-locate (use device geolocation)
+          </label>
+          <select id="severity">
+            <option value="minor">Minor</option>
+            <option value="moderate">Moderate</option>
+            <option value="severe">Severe</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <strong>Media Capture (Camera & Microphone)</strong>
+        <div class="small">Allow camera and microphone when prompted. Use Record to capture audio+video. You can download captured files.</div>
+        <div class="media-row" style="margin-top:8px;">
+          <div style="flex:1;">
+            <video id="preview" autoplay muted playsinline style="width:100%; height:200px; background:#000"></video>
+            <div style="margin-top:6px;">
+              <button id="start-rec">Start Recording</button>
+              <button id="stop-rec" disabled>Stop Recording</button>
+              <button id="download-video" disabled>Download Video</button>
+              <button id="download-audio" disabled>Download Audio</button>
+            </div>
+          </div>
+          <div style="width:220px;">
+            <audio id="playback" controls style="width:100%;"></audio>
+            <div class="small" style="margin-top:6px;">Recordings will appear here after stopping the recorder.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="right">
+      <div class="card">
+        <strong>Recipients / Nearby Contacts</strong>
+        <div class="small">Toggle who will be alerted. Coordinates are sample nearby places — replace with dynamic POI lookup in production.</div>
+        <div style="margin-top:8px;" class="recipient-list" id="recipients"></div>
+        <div style="margin-top:10px;">
+          <label class="small">Additional phone numbers / contacts (comma separated):</label><br />
+          <input id="extra-contacts" placeholder="+9198xxxx, +44..." style="width:100%; margin-top:6px;" />
+        </div>
+      </div>
+
+      <div class="card">
+        <strong>Alert Options</strong>
+        <div class="row" style="margin-top:8px;">
+          <label><input type="checkbox" id="send-sms" checked /> Send Normal SMS</label>
+          <label><input type="checkbox" id="send-wa" checked /> Send WhatsApp</label>
+        </div>
+        <div style="margin-top:8px;">
+          <button class="primary" id="send-alerts-btn">Send Alerts Now</button>
+          <button id="simulate-send-fail" title="simulate failure">Simulate Partial Fail</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <strong>Incident Log</strong>
+        <div class="log" id="log"></div>
+      </div>
+
+      <div class="card">
+        <strong>Download & Export</strong>
+        <div class="download-links" style="margin-top:6px;">
+          <a id="download-json" href="#" download="incident-data.json">Download Incident JSON</a>
+          <a id="download-all" href="#" download="media.zip">Export All (zip) - server required</a>
+        </div>
+        <div class="small" style="margin-top:8px;">
+          Note: browser-only export of video/audio is provided. For secure long-term storage and real message sending, run a backend (example Node/Twilio snippet included in comments below).
+        </div>
+      </div>
+
+      <footer>
+        Built for simulation — replace simulation endpoints with real backend to enable real SMS/WhatsApp. Camera/mic requires HTTPS and user permission.
+      </footer>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j8k5CH1+sk4u3f6u0xgR2a+exa0qvQ4c6Yk8/kM=" crossorigin=""></script>
+
+  <script>
+  /******************************************************************
+   * Accident Simulation Dashboard (client-side)
+   *
+   * Features:
+   * - Map with incident marker + sample nearby responders (hospitals/police)
+   * - Simulate collision trigger (uses geolocation or manual placement)
+   * - Camera & mic capture (getUserMedia) with MediaRecorder (video + audio)
+   * - Simulated alert sending to recipients; lines change color to indicate sent
+   * - Download recorded media and incident JSON
+   *
+   * Important: Browsers cannot directly send SMS/WhatsApp messages to arbitrary phone numbers.
+   * To send real messages, implement a backend endpoint (e.g. Node + Twilio / WhatsApp Business API)
+   * and call it from client (fetch POST /api/send_alert). Example server snippets are included
+   * in comments at the bottom of this file.
+   ******************************************************************/
+
+  // ---------- Configuration & sample recipients ----------
+  const sampleRecipients = [
+    { id: 'h1', type: 'Hospital', name: 'City General Hospital', phone: '+919900111222', lat: null, lng: null },
+    { id: 'p1', type: 'Police', name: 'Central Police Station', phone: '+919900333444', lat: null, lng: null },
+    { id: 'h2', type: 'Hospital', name: 'St Mary Medical', phone: '+919900555666', lat: null, lng: null },
+    { id: 'c1', type: 'Contact',  name: 'Family Contact', phone: '+919812345678', lat: null, lng: null }
+  ];
+
+  // We'll set sample coordinates relative to user's location during simulation (if available).
+  // ---------- UI references ----------
+  const logEl = document.getElementById('log');
+  const recipientsEl = document.getElementById('recipients');
+  const simulateBtn = document.getElementById('simulate-btn');
+  const incidentTimeEl = document.getElementById('incident-time');
+  const autoLocateCheckbox = document.getElementById('auto-locate');
+  const addManualBtn = document.getElementById('add-manual');
+  const sendAlertsBtn = document.getElementById('send-alerts-btn');
+  const simulateFailBtn = document.getElementById('simulate-send-fail');
+  const downloadJsonA = document.getElementById('download-json');
+  const downloadAllA = document.getElementById('download-all');
+  const extraContactsInput = document.getElementById('extra-contacts');
+
+  // media
+  const preview = document.getElementById('preview');
+  const playback = document.getElementById('playback');
+  const startRecBtn = document.getElementById('start-rec');
+  const stopRecBtn = document.getElementById('stop-rec');
+  const downloadVideoBtn = document.getElementById('download-video');
+  const downloadAudioBtn = document.getElementById('download-audio');
+
+  let map, incidentMarker, recipientMarkers = {}, lines = {};
+  let incidentData = null;
+  let simulatedPartialFail = false;
+
+  // ---------- Init map ----------
+  function initMap() {
+    map = L.map('map', { zoomControl:true }).setView([20.5937,78.9629], 6); // default India
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+  }
+
+  initMap();
+
+  // ---------- Render recipients UI ----------
+  function renderRecipients() {
+    recipientsEl.innerHTML = '';
+    sampleRecipients.forEach(r => {
+      const div = document.createElement('div');
+      div.className = 'recipient';
+      const left = document.createElement('div');
+      left.innerHTML = `<strong>${r.name}</strong><div class="small">${r.type} · ${r.phone}</div>`;
+      const right = document.createElement('div');
+      right.style.display='flex'; right.style.gap='6px'; right.style.alignItems='center';
+      const checkbox = document.createElement('input');
+      checkbox.type='checkbox'; checkbox.checked = true; checkbox.dataset.id = r.id;
+      right.appendChild(checkbox);
+      const dot = document.createElement('span');
+      dot.className = 'status-dot dot-pending'; dot.id = 'dot-'+r.id;
+      right.appendChild(dot);
+      div.appendChild(left); div.appendChild(right);
+      recipientsEl.appendChild(div);
+    });
+  }
+  renderRecipients();
+
+  // ---------- Helper: log ----------
+  function log(msg) {
+    const now = new Date().toLocaleString();
+    logEl.innerHTML = `<div style="margin-bottom:6px"><strong>[${now}]</strong> ${msg}</div>` + logEl.innerHTML;
+  }
+
+  // ---------- Geolocation helpers ----------
+  function locateUser() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation not supported'));
+      } else {
+        navigator.geolocation.getCurrentPosition(pos => {
+          resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        }, err => reject(err), { timeout: 10000 });
+      }
+    });
+  }
+
+  // ---------- Place marker & sample nearby POIs ----------
+  function placeIncident(lat,lng, timeISO) {
+    if (incidentMarker) map.removeLayer(incidentMarker);
+    incidentMarker = L.marker([lat,lng], { title:'Incident' }).addTo(map).bindPopup('Incident location').openPopup();
+    map.setView([lat,lng], 14);
+    incidentTimeEl.textContent = 'Incident time: ' + new Date(timeISO).toLocaleString();
+    // remove existing recipient markers/lines
+    Object.values(recipientMarkers).forEach(m => map.removeLayer(m));
+    Object.values(lines).forEach(l => map.removeLayer(l));
+    recipientMarkers = {}; lines = {};
+
+    // create sample nearby POIs around the incident
+    const offsets = [
+      [0.002, 0.003], [-0.003, -0.002], [0.004, -0.002], [-0.002, 0.004]
+    ];
+    sampleRecipients.forEach((r, idx) => {
+      const off = offsets[idx % offsets.length];
+      r.lat = lat + off[0];
+      r.lng = lng + off[1];
+      const m = L.circleMarker([r.lat, r.lng], { radius:8, color: r.type === 'Police' ? '#ff9900' : '#007bff' })
+                .addTo(map)
+                .bindPopup(`${r.name} <br/> ${r.type} <br/> ${r.phone}`);
+      recipientMarkers[r.id] = m;
+      // draw initial dashed line (pending)
+      const poly = L.polyline([[lat,lng],[r.lat,r.lng]], { color:'#f0ad4e', dashArray:'6', weight:3 }).addTo(map);
+      lines[r.id] = poly;
+      setStatusDot(r.id, 'pending');
+    });
+  }
+
+  function setStatusDot(id, status) {
+    const el = document.getElementById('dot-'+id);
+    if (!el) return;
+    el.className = 'status-dot ' + (status==='sent' ? 'dot-sent' : status==='failed' ? 'dot-failed' : 'dot-pending');
+  }
+
+  // ---------- Simulate collision trigger ----------
+  simulateBtn.addEventListener('click', async () => {
+    simulatedPartialFail = false;
+    log('Collision simulated by user.');
+    let coords = null;
+    if (autoLocateCheckbox.checked) {
+      try {
+        coords = await locateUser();
+        log('Auto-locate success: ' + coords.lat.toFixed(5) + ',' + coords.lng.toFixed(5));
+      } catch (e) {
+        log('Auto-locate failed: ' + e.message);
+        alert('Auto-locate failed. Place manual marker or allow location permission.');
+      }
+    }
+    if (!coords) {
+      // default center or prompt to click map
+      const center = map.getCenter();
+      coords = { lat: center.lat, lng: center.lng };
+    }
+    const timeISO = new Date().toISOString();
+    incidentData = {
+      id: 'INC-' + Date.now(),
+      time: timeISO,
+      severity: document.getElementById('severity').value,
+      location: coords,
+      recipients: sampleRecipients.map(r => ({ id: r.id, name: r.name, phone: r.phone, type: r.type })),
+      extra_contacts: (extraContactsInput.value||'').split(',').map(s=>s.trim()).filter(Boolean)
+    };
+    placeIncident(coords.lat, coords.lng, timeISO);
+    log('Incident recorded: ' + incidentData.id + ' Severity: ' + incidentData.severity);
+    updateDownloadJsonLink();
+  });
+
+  // allow manual placement mode: click map to place marker
+  addManualBtn.addEventListener('click', () => {
+    alert('Click on the map to set the incident location.');
+    const onMapClick = (e) => {
+      const { lat, lng } = e.latlng;
+      const timeISO = new Date().toISOString();
+      incidentData = {
+        id: 'INC-' + Date.now(),
+        time: timeISO,
+        severity: document.getElementById('severity').value,
+        location: { lat, lng },
+        recipients: sampleRecipients.map(r => ({ id: r.id, name: r.name, phone: r.phone, type: r.type })),
+        extra_contacts: (extraContactsInput.value||'').split(',').map(s=>s.trim()).filter(Boolean)
+      };
+      placeIncident(lat,lng,timeISO);
+      updateDownloadJsonLink();
+      map.off('click', onMapClick);
+      log('Manual incident placed at ' + lat.toFixed(5) + ',' + lng.toFixed(5));
+    };
+    map.on('click', onMapClick);
+  });
+
+  // ---------- Simulate alert sending (client-side simulation) ----------
+  async function sendAlerts(simulatePartialFail=false) {
+    if (!incidentData) { alert('No incident data yet. Simulate or place incident first.'); return; }
+    const sendSMS = document.getElementById('send-sms').checked;
+    const sendWA = document.getElementById('send-wa').checked;
+
+    const selectedRecipients = sampleRecipients.filter(r => {
+      const cb = document.querySelector('input[type=checkbox][data-id="'+r.id+'"]');
+      return cb && cb.checked;
+    });
+
+    const extraContacts = incidentData.extra_contacts || [];
+
+    log(`Sending alerts to ${selectedRecipients.length} recipients${extraContacts.length ? ' + ' + extraContacts.length + ' extra' : ''}. Methods: ${sendSMS? 'SMS ':' '}${sendWA? 'WhatsApp':''}`);
+
+    // For each recipient simulate an async request to a backend
+    for (let i=0;i<selectedRecipients.length;i++) {
+      const r = selectedRecipients[i];
+      // simulate network call
+      setStatusDot(r.id, 'pending');
+      // simulate delay
+      await new Promise(res => setTimeout(res, 700 + Math.random()*700));
+      // simulated success / failure
+      const failThis = simulatePartialFail && (i % 2 === 0); // fail every other if simulatePartialFail
+      if (!failThis) {
+        // visually update line to sent (green solid)
+        if (lines[r.id]) {
+          lines[r.id].setStyle({ color:'#28a745', dashArray:null, weight:4 });
+        }
+        setStatusDot(r.id, 'sent');
+        log(`Alert SENT to ${r.name} (${r.phone}) via ${sendSMS? 'SMS' : ''}${sendWA && sendSMS? ' & WhatsApp' : sendWA? 'WhatsApp':''}`);
+      } else {
+        if (lines[r.id]) {
+          lines[r.id].setStyle({ color:'#b02a37', dashArray:'8', weight:3 });
+        }
+        setStatusDot(r.id, 'failed');
+        log(`Alert FAILED for ${r.name} (${r.phone}) — simulated failure.`);
+      }
+      // In production: call backend endpoint:
+      // await fetch('/api/send_alert', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ incident: incidentData, recipient: r, methods: { sms: sendSMS, wa: sendWA } }) })
+    }
+
+    // also send to extra contacts (simulate)
+    for (let e of extraContacts) {
+      await new Promise(res => setTimeout(res, 400));
+      log(`Alert SENT to extra contact ${e}`);
+    }
+  }
+
+  sendAlertsBtn.addEventListener('click', async () => {
+    simulatedPartialFail = false;
+    await sendAlerts(false);
+  });
+
+  simulateFailBtn.addEventListener('click', async () => {
+    simulatedPartialFail = true;
+    log('Simulating partial failures.');
+    await sendAlerts(true);
+  });
+
+  // ---------- Media capture (MediaRecorder) ----------
+  let mediaStream = null;
+  let mediaRecorder = null;
+  let recordedBlobs = [];
+  let recordedAudioBlob = null; // optional separate audio extraction
+  async function startMedia() {
+    if (mediaStream) return mediaStream;
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:{ width:640, height:360 } });
+      preview.srcObject = mediaStream;
+      return mediaStream;
+    } catch (e) {
+      console.error('getUserMedia error', e);
+      alert('Camera/Mic access required for capture. ' + e.message);
+      throw e;
+    }
+  }
+
+  startRecBtn.addEventListener('click', async () => {
+    await startMedia();
+    recordedBlobs = [];
+    const options = { mimeType: 'video/webm;codecs=vp8,opus' };
+    try {
+      mediaRecorder = new MediaRecorder(mediaStream, options);
+    } catch (e) {
+      console.warn('MediaRecorder error, trying default', e);
+      mediaRecorder = new MediaRecorder(mediaStream);
+    }
+    mediaRecorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size) recordedBlobs.push(ev.data);
+    };
+    mediaRecorder.onstop = async () => {
+      const superBlob = new Blob(recordedBlobs, { type: 'video/webm' });
+      const url = URL.createObjectURL(superBlob);
+      playback.src = url;
+      downloadVideoBtn.disabled = false;
+      downloadVideoBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (incidentData?.id || 'recording') + '.webm';
+        a.click();
+      };
+      // create separate audio blob using WebAudio if needed (optional)
+      try {
+        const audioOnly = await extractAudioFromBlob(superBlob);
+        recordedAudioBlob = audioOnly;
+        const audioUrl = URL.createObjectURL(audioOnly);
+        downloadAudioBtn.disabled = false;
+        downloadAudioBtn.onclick = () => {
+          const a = document.createElement('a');
+          a.href = audioUrl;
+          a.download = (incidentData?.id || 'recording') + '.ogg';
+          a.click();
+        };
+      } catch (e) {
+        console.warn('Audio extraction failed', e);
+      }
+      log('Recording stopped. Video ready for download.');
+    };
+    mediaRecorder.start();
+    startRecBtn.disabled = true;
+    stopRecBtn.disabled = false;
+    log('Recording started.');
+  });
+
+  stopRecBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      startRecBtn.disabled = false;
+      stopRecBtn.disabled = true;
+    }
+  });
+
+  // Simple audio extraction from recorded webm using AudioContext (browser support limited for direct blob decoding)
+  async function extractAudioFromBlob(blob) {
+    // decode with AudioContext (works if browser can decode webm/opus)
+    const arrayBuffer = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(arrayBuffer).catch(async (err) => {
+      // decodeAudioData may fail for webm in some browsers; fallback: return same blob as "audio" (not ideal)
+      console.warn('decodeAudioData failed:', err);
+      throw err;
+    });
+    // re-encode to Ogg/PCM not possible client-side without extra encoder libs; simple approach: create WAV
+    // create WAV from decoded buffer
+    const wav = audioBufferToWav(decoded);
+    return new Blob([wav], { type: 'audio/wav' });
+  }
+
+  // audioBuffer -> wav (tiny util)
+  function audioBufferToWav(buffer, opt) {
+    opt = opt || {}
+    var numChannels = buffer.numberOfChannels
+    var sampleRate = buffer.sampleRate
+    var format = opt.float32 ? 3 : 1
+    var bitDepth = format === 3 ? 32 : 16
+    var result
+    if (numChannels === 2) {
+      result = interleave(buffer.getChannelData(0), buffer.getChannelData(1))
+    } else {
+      result = buffer.getChannelData(0)
+    }
+    return encodeWAV(result, numChannels, sampleRate, bitDepth)
+  }
+  function interleave(inputL, inputR) {
+    var length = inputL.length + inputR.length
+    var result = new Float32Array(length)
+    var index = 0
+    var inputIndex = 0
+    while (index < length) {
+      result[index++] = inputL[inputIndex]
+      result[index++] = inputR[inputIndex]
+      inputIndex++
+    }
+    return result
+  }
+  function floatTo16BitPCM(output, offset, input) {
+    for (var i = 0; i < input.length; i++, offset += 2) {
+      var s = Math.max(-1, Math.min(1, input[i]))
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+    }
+  }
+  function writeString(view, offset, string) {
+    for (var i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i))
+    }
+  }
+  function encodeWAV(samples, numChannels, sampleRate, bitDepth) {
+    var bytesPerSample = bitDepth / 8
+    var blockAlign = numChannels * bytesPerSample
+    var buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
+    var view = new DataView(buffer)
+    /* RIFF identifier */
+    writeString(view, 0, 'RIFF')
+    /* file length */
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true)
+    /* RIFF type */
+    writeString(view, 8, 'WAVE')
+    /* format chunk identifier */
+    writeString(view, 12, 'fmt ')
+    /* format chunk length */
+    view.setUint32(16, 16, true)
+    /* sample format (raw) */
+    view.setUint16(20, 1, true)
+    /* channel count */
+    view.setUint16(22, numChannels, true)
+    /* sample rate */
+    view.setUint32(24, sampleRate, true)
+    /* byte rate (sample rate * block align) */
+    view.setUint32(28, sampleRate * blockAlign, true)
+    /* block align (channel count * bytes per sample) */
+    view.setUint16(32, blockAlign, true)
+    /* bits per sample */
+    view.setUint16(34, bitDepth, true)
+    /* data chunk identifier */
+    writeString(view, 36, 'data')
+    /* data chunk length */
+    view.setUint32(40, samples.length * bytesPerSample, true)
+    if (bitDepth === 16) {
+      floatTo16BitPCM(view, 44, samples)
+    } else {
+      // 32-bit float
+      var offset = 44
+      for (var i = 0; i < samples.length; i++, offset += 4) {
+        view.setFloat32(offset, samples[i], true)
+      }
+    }
+    return view
+  }
+
+  // ---------- Download incident JSON ----------
+  function updateDownloadJsonLink() {
+    if (!incidentData) return;
+    const jsonStr = JSON.stringify(incidentData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    downloadJsonA.href = url;
+    downloadJsonA.download = (incidentData.id || 'incident') + '.json';
+  }
+
+  // ---------- Optional: implement a call to backend to actually send alerts ----------
+  // Example: call '/api/send_alert' with JSON body { incident, recipient, methods: { sms: true/false, wa: true/false } }
+  // Backend should handle provider integration (e.g. Twilio, Vonage, WhatsApp Business API).
+  //
+  // Example pseudo-call:
+  // await fetch('/api/send_alert', {
+  //   method: 'POST',
+  //   headers: { 'Content-Type': 'application/json' },
+  //   body: JSON.stringify({ incident: incidentData, recipient: r, methods: { sms: true, wa: true } })
+  // });
+
+  // ---------- Basic startup: try to get approximate location and initialize map marker ----------
+  (async function startup() {
+    try {
+      const pos = await locateUser();
+      map.setView([pos.lat, pos.lng], 13);
+      log('Initial location obtained.');
+    } catch (e) {
+      log('Initial location unavailable; using default map view.');
+    }
+  })();
+
+  // ---------- Optional: "download all" would require zipping server-side or using JSZip (not included) ----------
+  downloadAllA.addEventListener('click', (e) => {
+    e.preventDefault();
+    alert('Export all (zip) requires server support or include JSZip. Use the incident JSON + downloaded media. Server example included in comments.');
+  });
+
+  // ---------- Clean up on page unload ----------
+  window.addEventListener('beforeunload', () => {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t=>t.stop());
+    }
+  });
+
+  /******************************************************************
+   * Example server-side snippet (Node.js + Express + Twilio) — replace
+   * these with your real credentials and host on a secure backend.
+   *
+   * // Node (server.js)
+   * const express = require('express');
+   * const bodyParser = require('body-parser');
+   * const twilio = require('twilio');
+   * const app = express();
+   * app.use(bodyParser.json());
+   *
+   * const accountSid = process.env.TWILIO_ACCOUNT_SID;
+   * const authToken = process.env.TWILIO_AUTH_TOKEN;
+   * const client = twilio(accountSid, authToken);
+   *
+   * app.post('/api/send_alert', async (req, res) => {
+   *   const { incident, recipient, methods } = req.body;
+   *   try {
+   *     if (methods.sms) {
+   *       await client.messages.create({
+   *         body: `ALERT: Incident ${incident.id} at ${incident.location.lat},${incident.location.lng}. Severity: ${incident.severity}. Please respond.`,
+   *         from: process.env.TWILIO_PHONE_NUMBER, // buy from Twilio
+   *         to: recipient.phone
+   *       });
+   *     }
+   *     if (methods.wa) {
+   *       // WhatsApp via Twilio:
+   *       await client.messages.create({
+   *         body: `*ALERT* Incident ${incident.id} at ${incident.location.lat},${incident.location.lng}. Severity: ${incident.severity}.`,
+   *         from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER,
+   *         to: 'whatsapp:' + recipient.phone
+   *       });
+   *     }
+   *     res.json({ ok:true });
+   *   } catch (err) {
+   *     console.error(err);
+   *     res.status(500).json({ ok:false, error: err.message });
+   *   }
+   * });
+   *
+   * app.listen(3000, ()=> console.log('API listening on 3000'));
+   *
+   * Security notes:
+   * - Never embed Twilio credentials in client-side code.
+   * - Validate & rate-limit API usage.
+   * - Respect privacy, legal requirements for automatic alerting.
+   ******************************************************************/
+
+  </script>
+</body>
+</html>
